@@ -83,6 +83,7 @@ jobs:
           --console-host "${{ secrets.PCC_CONSOLE_ADDR }}" \
           --user ${{ secrets.PCC_USER }} \
           --password ${{ secrets.PCC_PASS }} \
+          --image-name "${{ steps.build-image.outputs.image }}" \
           --output-file "protected_taskdef.json" \
           ${{ steps.task-def.outputs.task-definition }}
 
