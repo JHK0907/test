@@ -8,4 +8,4 @@ COPY src/ /usr/share/nginx/html/
 EXPOSE 80
 
 # nginx 포그라운드 실행
-CMD ["nginx", "-g", "daemon off;"]
+ENTRYPOINT ["nginx", "-g", "daemon off;"]
