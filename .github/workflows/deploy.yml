@@ -1,0 +1,102 @@
+
+name: Deploy web to ECS Fargate
+
+on:
+  push:
+    branches:
+      - main
+
+# OIDC
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: ap-northeast-2
+  ECR_REPOSITORY: hkjung-web-repo
+  ECS_CLUSTER: hkjung-web-cluster
+  ECS_SERVICE: hkjung-web-web-service
+  ECS_TASK_DEFINITION: task-definition.json
+  CONTAINER_NAME: hkjung-web-container
+  ECS_TASK_DEFINITION_FAMILY: hkjung-web-web-app 
+
+jobs:
+  deploy:
+    name: Build, Scan & Deploy
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v3
+
+    - name: Run Checkov IaC Scan (Direct Docker Command)
+      env:
+        PRISMA_API_URL: ${{ secrets.PRISMA_API_URL }}
+        PRISMA_API_KEY: ${{ secrets.BC_API_KEY }}
+        BC_REPO_ID: ${{ github.repository }} # 직접 실행 시 환경 변수로 전달
+      run: |
+        docker run --rm \
+          -e PRISMA_API_KEY="${{ env.PRISMA_API_KEY }}" \
+          -e PRISMA_API_URL="${{ env.PRISMA_API_URL }}" \
+          -v ${{ github.workspace }}:/app \
+          bridgecrew/checkov:latest \
+          --directory /app/terraform \
+          --soft-fail \
+          --repo-id ${{ github.repository }} \
+          --output sarif
+
+
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        # GitHub Actions를 위한 IAM Role ARN. 다음 단계에서 Terraform으로 생성할 예정입니다.
+        role-to-assume: ${{ secrets.AWS_IAM_ROLE_ARN }}
+        aws-region: ${{ env.AWS_REGION }}
+
+    - name: Login to Amazon ECR
+      id: login-ecr
+      uses: aws-actions/amazon-ecr-login@v1
+
+    - name: Build, tag, and push image to Amazon ECR
+      id: build-image
+      env:
+        ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        IMAGE_TAG: ${{ github.sha }}-${{ github.run_number }}
+      run: |
+        # Dockerfile이 있는 경로에서 실행해야 합니다. (루트 경로에 Dockerfile 가정)
+        docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
+        docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+        echo "::set-output name=image::$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
+    
+    - name: Get current task definition ARN from ECS service
+      id: get-task-def
+      run: |
+        TASK_DEF_ARN=$(aws ecs describe-services \
+        --cluster ${{ env.ECS_CLUSTER }} \
+        --services ${{ env.ECS_SERVICE }} \
+        --query "services[0].taskDefinition" \
+        --output text)
+
+        echo "TASK_DEF_ARN=$TASK_DEF_ARN" >> $GITHUB_ENV
+  
+
+
+    - name: Download task definition
+      run: |
+        aws ecs describe-task-definition --task-definition ${{ env.ECS_TASK_DEFINITION_FAMILY }} --query taskDefinition > ${{ env.ECS_TASK_DEFINITION }}
+
+    - name: Fill in the new image ID in the Amazon ECS task definition
+      id: task-def
+      uses: aws-actions/amazon-ecs-render-task-definition@v1
+      with:
+        task-definition: ${{ env.ECS_TASK_DEFINITION }}
+        container-name: ${{ env.CONTAINER_NAME }}
+        image: ${{ steps.build-image.outputs.image }}
+
+    - name: Deploy Amazon ECS task definition
+      uses: aws-actions/amazon-ecs-deploy-task-definition@v2
+      with:
+        task-definition: ${{ steps.task-def.outputs.task-definition }}
+        service: ${{ env.ECS_SERVICE }}
+        cluster: ${{ env.ECS_CLUSTER }}
+        wait-for-service-stability: true
