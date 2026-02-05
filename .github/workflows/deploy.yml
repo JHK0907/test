@@ -51,6 +51,11 @@ jobs:
       run: |
         aws ecs describe-task-definition --task-definition ${{ env.ECS_TASK_DEFINITION_FAMILY }} --query taskDefinition > ${{ env.ECS_TASK_DEFINITION }}
 
+    - name: Clean up existing Prisma Defender from Task Definition
+      run: |
+        # 기존에 들어있을 수 있는 TwistlockDefender 컨테이너 정의를 삭제합니다.
+        jq 'del(.containerDefinitions[] | select(.name == "TwistlockDefender"))' ${{ env.ECS_TASK_DEFINITION }} > temp.json && mv temp.json ${{ env.ECS_TASK_DEFINITION }}
+
     - name: Patch Task Definition with Entrypoint
       run: |
         jq '(.containerDefinitions[] | select(.name=="${{ env.CONTAINER_NAME }}") | .entryPoint) = ["nginx", "-g", "daemon off;"]' ${{ env.ECS_TASK_DEFINITION }} > temp.json && mv temp.json ${{ env.ECS_TASK_DEFINITION }}
