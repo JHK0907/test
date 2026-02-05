@@ -18,21 +18,24 @@ env:
   CONTAINER_NAME: hkjung-web-container
   ECS_TASK_DEFINITION_FAMILY: hkjung-web-web-app 
 
-jobs:
+jjobs:
   deploy:
     name: Build, Scan & Deploy
     runs-on: ubuntu-latest
 
     steps:
+    # [필수] 소스 코드를 가져오는 단계
     - name: Checkout
       uses: actions/checkout@v3
 
+    # [필수] AWS 로그인
     - name: Configure AWS credentials
       uses: aws-actions/configure-aws-credentials@v4
       with:
         role-to-assume: ${{ secrets.AWS_IAM_ROLE_ARN }}
         aws-region: ${{ env.AWS_REGION }}
 
+    # [필수] ECR 로그인 및 이미지 빌드/푸시
     - name: Login to Amazon ECR
       id: login-ecr
       uses: aws-actions/amazon-ecr-login@v1
@@ -47,21 +50,20 @@ jobs:
         docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
         echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_OUTPUT
 
+    # --- 여기서부터 제가 드린 5단계를 적용하세요 ---
+
+    # 1. AWS에서 현재 설정을 다운로드
     - name: Download task definition
       run: |
         aws ecs describe-task-definition --task-definition ${{ env.ECS_TASK_DEFINITION_FAMILY }} --query taskDefinition > ${{ env.ECS_TASK_DEFINITION }}
 
-    - name: Clean up existing Prisma Defender from Task Definition
+    # 2. 기존 오염된 설정(중복된 디펜더 등)을 완전히 제거
+    - name: Clean up existing Prisma Defender
       run: |
-        # 기존에 들어있을 수 있는 TwistlockDefender 컨테이너 정의를 삭제합니다.
-        jq 'del(.containerDefinitions[] | select(.name == "TwistlockDefender"))' ${{ env.ECS_TASK_DEFINITION }} > temp.json && mv temp.json ${{ env.ECS_TASK_DEFINITION }}
+        jq 'del(.containerDefinitions[] | select(.name == "TwistlockDefender")) | .containerDefinitions[].dependsOn = [] | .containerDefinitions[].volumesFrom = [] | .containerDefinitions[].linuxParameters.capabilities.add = ["SYS_PTRACE"]' ${{ env.ECS_TASK_DEFINITION }} > temp.json && mv temp.json ${{ env.ECS_TASK_DEFINITION }}
 
-    - name: Patch Task Definition with Entrypoint
-      run: |
-        jq '(.containerDefinitions[] | select(.name=="${{ env.CONTAINER_NAME }}") | .entryPoint) = ["nginx", "-g", "daemon off;"]' ${{ env.ECS_TASK_DEFINITION }} > temp.json && mv temp.json ${{ env.ECS_TASK_DEFINITION }}
-
-    # 1. 이미지 교체를 먼저 수행 (결과물은 ${{ steps.task-def.outputs.task-definition }}에 저장됨)
-    - name: Fill in the new image ID in the Amazon ECS task definition
+    # 3. 깨끗한 원본에 새 이미지 주소만 반영
+    - name: Fill in the new image ID
       id: task-def
       uses: aws-actions/amazon-ecs-render-task-definition@v1
       with:
@@ -69,7 +71,7 @@ jobs:
         container-name: ${{ env.CONTAINER_NAME }}
         image: ${{ steps.build-image.outputs.image }}
 
-    # 2. Prisma Defender 주입 (위에서 이미지가 교체된 파일을 입력값으로 사용)
+    # 4. Prisma 주입 (twistcli 다운로드 및 실행)
     - name: Download twistcli
       run: |
         curl -s -k -u ${{ secrets.PCC_USER }}:${{ secrets.PCC_PASS }} \
@@ -88,8 +90,8 @@ jobs:
           --extract-entrypoint \
           ${{ steps.task-def.outputs.task-definition }}
 
-    # 3. 최종 배포 (Prisma가 최종 가공한 protected_taskdef.json 사용)
-    - name: Deploy Amazon ECS task definition
+    # 5. 최종 배포
+    - name: Deploy
       uses: aws-actions/amazon-ecs-deploy-task-definition@v2
       with:
         task-definition: protected_taskdef.json
