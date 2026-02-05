@@ -5,7 +5,6 @@ on:
     branches:
       - main
 
-# OIDC 권한 설정
 permissions:
   id-token: write
   contents: read
@@ -28,10 +27,6 @@ jobs:
     - name: Checkout
       uses: actions/checkout@v3
 
-    # Checkov 보안 스캔 (필요 시 주석 해제)
-    # - name: Run Checkov IaC Scan
-    #   ... (기존 코드와 동일)
-
     - name: Configure AWS credentials
       uses: aws-actions/configure-aws-credentials@v4
       with:
@@ -50,44 +45,23 @@ jobs:
       run: |
         docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
         docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
-        # 최신 문법인 GITHUB_OUTPUT 사용
         echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_OUTPUT
 
-    # 1. 현재 서비스에서 사용 중인 Task Definition ARN 가져오기 (기존 코드 유지)
-    - name: Get current task definition ARN from ECS service
-      id: get-task-def
-      run: |
-        TASK_DEF_ARN=$(aws ecs describe-services \
-        --cluster ${{ env.ECS_CLUSTER }} \
-        --services ${{ env.ECS_SERVICE }} \
-        --query "services[0].taskDefinition" \
-        --output text)
-        echo "TASK_DEF_ARN=$TASK_DEF_ARN" >> $GITHUB_ENV
-
-    # 2. Task Definition 상세 내용을 JSON 파일로 저장 (기존 코드 유지)
     - name: Download task definition
       run: |
         aws ecs describe-task-definition --task-definition ${{ env.ECS_TASK_DEFINITION_FAMILY }} --query taskDefinition > ${{ env.ECS_TASK_DEFINITION }}
 
-    # ==========================================================
-    # 핵심: JSON 파일에 Entrypoint가 없어서 나는 에러를 강제로 해결
-    # ==========================================================
     - name: Patch Task Definition with Entrypoint
       run: |
-        # jq를 사용해 hkjung-web-container에 Nginx 실행 명령을 명시적으로 추가합니다.
         jq '(.containerDefinitions[] | select(.name=="${{ env.CONTAINER_NAME }}") | .entryPoint) = ["nginx", "-g", "daemon off;"]' ${{ env.ECS_TASK_DEFINITION }} > temp.json && mv temp.json ${{ env.ECS_TASK_DEFINITION }}
-        
-        # 확인용 (로그에서 실제로 추가됐는지 볼 수 있습니다)
-        cat ${{ env.ECS_TASK_DEFINITION }} | jq '.containerDefinitions[] | {name: .name, entryPoint: .entryPoint}'
 
-
-    # 3. Prisma Cloud Defender 주입 (추가된 단계)
     - name: Download twistcli
       run: |
         curl -s -k -u ${{ secrets.PCC_USER }}:${{ secrets.PCC_PASS }} \
         https://${{ secrets.PCC_CONSOLE_URL }}/api/v1/util/twistcli -o twistcli
         chmod +x twistcli
 
+    # [수정됨] twistcli에서 직접 이미지를 교체하여 중복 오류 방지
     - name: Embed Prisma Cloud Defender
       run: |
         ./twistcli app-embedded generate-fargate-task \
@@ -96,25 +70,14 @@ jobs:
           --user ${{ secrets.PCC_USER }} \
           --password ${{ secrets.PCC_PASS }} \
           --output-file "protected_taskdef.json" \
+          --image "${{ env.CONTAINER_NAME }}=${{ steps.build-image.outputs.image }}" \
           ${{ env.ECS_TASK_DEFINITION }}
-        
-        # 주입된 결과물을 원본 파일로 덮어쓰기
-        mv protected_taskdef.json ${{ env.ECS_TASK_DEFINITION }}
 
-    # 4. 새 이미지 ID를 Task Definition에 반영 (기존 코드 유지)
-    - name: Fill in the new image ID in the Amazon ECS task definition
-      id: task-def
-      uses: aws-actions/amazon-ecs-render-task-definition@v1
-      with:
-        task-definition: ${{ env.ECS_TASK_DEFINITION }}
-        container-name: ${{ env.CONTAINER_NAME }}
-        image: ${{ steps.build-image.outputs.image }}
 
-    # 5. 최종 배포 (기존 코드 유지)
     - name: Deploy Amazon ECS task definition
       uses: aws-actions/amazon-ecs-deploy-task-definition@v2
       with:
-        task-definition: ${{ steps.task-def.outputs.task-definition }}
+        task-definition: protected_taskdef.json
         service: ${{ env.ECS_SERVICE }}
         cluster: ${{ env.ECS_CLUSTER }}
         wait-for-service-stability: true

@@ -126,7 +126,7 @@ resource "aws_ecs_service" "web_app" {
 # 6. Docker 이미지를 저장할 ECR(Elastic Container Registry) 생성
 resource "aws_ecr_repository" "web_app" {
   name                 = "${var.name_prefix}-${var.project_name}-repo"
-  image_tag_mutability = "IMMUTABLE"
+  image_tag_mutability = "MUTABLE"
 
   image_scanning_configuration {
     scan_on_push = true
