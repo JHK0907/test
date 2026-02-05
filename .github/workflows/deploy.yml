@@ -85,8 +85,7 @@ jobs:
           --password ${{ secrets.PCC_PASS }} \
           --image-name "${{ steps.build-image.outputs.image }}" \
           --output-file "protected_taskdef.json" \
-          --app-id "hkjung-web-app" \
-          --data-folder "/tmp/twistlock" \
+          --extract-entrypoint \
           ${{ steps.task-def.outputs.task-definition }}
 
     # 3. 최종 배포 (Prisma가 최종 가공한 protected_taskdef.json 사용)
