@@ -69,6 +69,18 @@ jobs:
       run: |
         aws ecs describe-task-definition --task-definition ${{ env.ECS_TASK_DEFINITION_FAMILY }} --query taskDefinition > ${{ env.ECS_TASK_DEFINITION }}
 
+    # ==========================================================
+    # 핵심: JSON 파일에 Entrypoint가 없어서 나는 에러를 강제로 해결
+    # ==========================================================
+    - name: Patch Task Definition with Entrypoint
+      run: |
+        # jq를 사용해 hkjung-web-container에 Nginx 실행 명령을 명시적으로 추가합니다.
+        jq '(.containerDefinitions[] | select(.name=="${{ env.CONTAINER_NAME }}") | .entryPoint) = ["nginx", "-g", "daemon off;"]' ${{ env.ECS_TASK_DEFINITION }} > temp.json && mv temp.json ${{ env.ECS_TASK_DEFINITION }}
+        
+        # 확인용 (로그에서 실제로 추가됐는지 볼 수 있습니다)
+        cat ${{ env.ECS_TASK_DEFINITION }} | jq '.containerDefinitions[] | {name: .name, entryPoint: .entryPoint}'
+
+
     # 3. Prisma Cloud Defender 주입 (추가된 단계)
     - name: Download twistcli
       run: |
