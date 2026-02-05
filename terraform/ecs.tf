@@ -46,8 +46,8 @@ resource "aws_ecs_task_definition" "web_app" {
   family                   = "${var.name_prefix}-${var.project_name}-web-app"
   network_mode             = "awsvpc" # Fargate는 awsvpc 모드만 지원
   requires_compatibilities = ["FARGATE"]
-  cpu                      = "256"  # 0.25 vCPU (최소 단위)
-  memory                   = "512"  # 0.5 GB (최소 단위)
+  cpu                      = "512"  # 0.25 vCPU (최소 단위)
+  memory                   = "1024"  # 0.5 GB (최소 단위)
   execution_role_arn       = aws_iam_role.ecs_task_execution_role.arn
   
   # 실제 컨테이너 정의
