@@ -18,7 +18,7 @@ env:
   CONTAINER_NAME: hkjung-web-container
   ECS_TASK_DEFINITION_FAMILY: hkjung-web-web-app 
 
-jjobs:
+jobs:
   deploy:
     name: Build, Scan & Deploy
     runs-on: ubuntu-latest
