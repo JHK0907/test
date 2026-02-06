@@ -84,10 +84,14 @@ jobs:
         PCC_USER: ${{ secrets.PCC_USER }}
         PCC_PASS: ${{ secrets.PCC_PASS }}
       run: |
-        CLEAN_URL=$(echo "$PCC_CONSOLE_URL" | sed 's:/*$::')
+        # 1. 시크릿에 프로토콜이 없으므로 https://를 붙이고, 끝에 슬래시가 있다면 제거
+        CLEAN_URL="https://$(echo "$PCC_CONSOLE_URL" | sed 's:/*$::')"
+        
+        # 2. curl 실행 시 프로토콜이 포함된 CLEAN_URL 사용
         curl -k -s -L -u "$PCC_USER:$PCC_PASS" \
              "$CLEAN_URL/api/v1/util/twistcli?os=linux" -o twistcli
         chmod +x twistcli
+
 
     # 9. Embed Defender 및 바이너리 추출
     - name: Embed Defender and Extract
@@ -96,7 +100,9 @@ jobs:
         PCC_USER: ${{ secrets.PCC_USER }}
         PCC_PASS: ${{ secrets.PCC_PASS }}
       run: |
-        CLEAN_URL=$(echo "$PCC_CONSOLE_URL" | sed 's:/*$::')
+        # 여기도 동일하게 https:// 보정
+        CLEAN_URL="https://$(echo "$PCC_CONSOLE_URL" | sed 's:/*$::')"
+        
         ./twistcli app-embedded embed \
           --address "$CLEAN_URL" \
           --user "$PCC_USER" \
