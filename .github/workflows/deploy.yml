@@ -108,7 +108,7 @@ jobs:
           --address "$CLEAN_URL" \
           --user "$PCC_USER" \
           --password "$PCC_PASS" \
-          --app-id "${{ env.ECR_REPOSITORY }}" \
+          --app-id "${{ env.ECS_CLUSTER }}" \
           --data-folder "/tmp" \
           Dockerfile
         
