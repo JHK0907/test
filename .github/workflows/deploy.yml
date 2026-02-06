@@ -64,7 +64,8 @@ jobs:
         | .containerDefinitions[].dependsOn = [] 
         | .containerDefinitions[].volumesFrom = [] 
         | .containerDefinitions[].linuxParameters.capabilities.add = ["SYS_PTRACE"]
-        | (.containerDefinitions[] | select(.name == "${{ env.CONTAINER_NAME }}") | .entryPoint) = ["nginx", "-g", "daemon off;"]' ${{ env.ECS_TASK_DEFINITION }} > temp.json && mv temp.json ${{ env.ECS_TASK_DEFINITION }}
+        | del(.containerDefinitions[] | select(.name == "${{ env.CONTAINER_NAME }}") | .entryPoint)' ${{ env.ECS_TASK_DEFINITION }} > temp.json && mv temp.json ${{ env.ECS_TASK_DEFINITION }}
+
 
     # 7. 원본 이미지 주소를 기반으로 Task Def 렌더링
     - name: Fill in the new image ID
