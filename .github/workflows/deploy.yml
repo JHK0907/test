@@ -141,12 +141,28 @@ jobs:
         docker push $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:protected-$COMMIT_HASH
         docker push $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:latest-protected
 
-    # 12. 최종 배포 (보안 이미지가 아닌, 원본 이미지 주소가 포함된 Task Def를 사용하거나 
-    # 필요에 따라 protected 이미지를 참조하도록 여기서 최종 결정)
+# 11-1. 배포용 설계도의 이미지 주소를 보안 이미지로 최종 교체
+    - name: Update Task Definition to use Protected Image
+      id: create-final-json  # 1. 이 단계에 ID를 부여합니다 (참조용 이름표)
+      env:
+        ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+      run: |
+        # 사용할 최종 파일명 정의
+        FINAL_FILE="protected-final-task-def.json"
+
+        # jq로 파일 생성
+        jq "(.containerDefinitions[] | select(.name == \"${{ env.CONTAINER_NAME }}\") | .image) = \"$ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:latest-protected\"" ${{ steps.task-def.outputs.task-definition }} > $FINAL_FILE
+        
+        # 2. 생성된 파일 경로를 'task_def_path'라는 변수에 담아 다음 단계로 전달
+        echo "task_def_path=$FINAL_FILE" >> $GITHUB_OUTPUT
+
+    # 12. 최종 배포 (변수로 자동 연결)
     - name: Deploy Amazon ECS task definition
       uses: aws-actions/amazon-ecs-deploy-task-definition@v2
       with:
-        task-definition: ${{ steps.task-def.outputs.task-definition }}
+        # 3. 앞 단계(create-final-json)에서 넘겨준 경로를 자동으로 가져옴
+        # 파일명이 바뀌어도 여기 코드는 수정할 필요가 없음!
+        task-definition: ${{ steps.create-final-json.outputs.task_def_path }}
         service: ${{ env.ECS_SERVICE }}
         cluster: ${{ env.ECS_CLUSTER }}
         wait-for-service-stability: true
