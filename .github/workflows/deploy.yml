@@ -26,9 +26,9 @@ jobs:
     steps:
     # 1. 소스 코드 체크아웃
     - name: Checkout
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
 
-    # 2. AWS 인증
+    # 2. AWS 인증 (OIDC)
     - name: Configure AWS credentials
       uses: aws-actions/configure-aws-credentials@v4
       with:
@@ -38,10 +38,10 @@ jobs:
     # 3. ECR 로그인
     - name: Login to Amazon ECR
       id: login-ecr
-      uses: aws-actions/amazon-ecr-login@v1
+      uses: aws-actions/amazon-ecr-login@v2
 
-    # 4. 이미지 빌드 및 푸시
-    - name: Build, tag, and push image to Amazon ECR
+    # 4. [원본 이미지] 빌드 및 푸시
+    - name: Build, tag, and push plain image to Amazon ECR
       id: build-image
       env:
         ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
@@ -49,15 +49,15 @@ jobs:
       run: |
         docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
         docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+        # 후속 단계에서 참조할 원본 이미지 주소 출력
         echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_OUTPUT
 
-    # 5. 현재 Task Definition 다운로드
+    # 5. 현재 ECS Task Definition 다운로드
     - name: Download task definition
       run: |
         aws ecs describe-task-definition --task-definition ${{ env.ECS_TASK_DEFINITION_FAMILY }} --query taskDefinition > ${{ env.ECS_TASK_DEFINITION }}
 
-    # 6. [핵심] 기존 설정 "대청소" (Clean Up)
-    # 설명: 기존 Defender 컨테이너 삭제 + 중복된 종속성 제거 + **앱 컨테이너 시작 명령(EntryPoint)을 Nginx 기본값으로 초기화**
+    # 6. 기존 설정 청소 (Clean Up)
     - name: Clean up existing Prisma Defender
       run: |
         jq 'del(.containerDefinitions[] | select(.name == "TwistlockDefender")) 
@@ -66,7 +66,7 @@ jobs:
         | .containerDefinitions[].linuxParameters.capabilities.add = ["SYS_PTRACE"]
         | (.containerDefinitions[] | select(.name == "${{ env.CONTAINER_NAME }}") | .entryPoint) = ["nginx", "-g", "daemon off;"]' ${{ env.ECS_TASK_DEFINITION }} > temp.json && mv temp.json ${{ env.ECS_TASK_DEFINITION }}
 
-    # 7. 깨끗해진 파일에 새 앱 이미지 ID 반영
+    # 7. 원본 이미지 주소를 기반으로 Task Def 렌더링
     - name: Fill in the new image ID
       id: task-def
       uses: aws-actions/amazon-ecs-render-task-definition@v1
@@ -75,42 +75,72 @@ jobs:
         container-name: ${{ env.CONTAINER_NAME }}
         image: ${{ steps.build-image.outputs.image }}
 
-    # 8. Twistcli 다운로드
-    - name: Download twistcli
+    # --- 여기서부터 [보안 이미지 병합 빌드] 과정 ---
+
+    # 8. twistcli 다운로드 (PCC 변수명 통일)
+    - name: Download and prepare twistcli
+      env:
+        PCC_CONSOLE_URL: ${{ secrets.PCC_CONSOLE_URL }}
+        PCC_USER: ${{ secrets.PCC_USER }}
+        PCC_PASS: ${{ secrets.PCC_PASS }}
       run: |
-        curl -s -k -u ${{ secrets.PCC_USER }}:${{ secrets.PCC_PASS }} \
-        https://${{ secrets.PCC_CONSOLE_URL }}/api/v1/util/twistcli -o twistcli
+        CLEAN_URL=$(echo "$PCC_CONSOLE_URL" | sed 's:/*$::')
+        curl -k -s -L -u "$PCC_USER:$PCC_PASS" \
+             "$CLEAN_URL/api/v1/util/twistcli?os=linux" -o twistcli
         chmod +x twistcli
 
-    # 9. Prisma Defender 주입 (보안 레이어 추가)
-    - name: Embed Prisma Cloud Defender
+    # 9. Embed Defender 및 바이너리 추출
+    - name: Embed Defender and Extract
+      env:
+        PCC_CONSOLE_URL: ${{ secrets.PCC_CONSOLE_URL }}
+        PCC_USER: ${{ secrets.PCC_USER }}
+        PCC_PASS: ${{ secrets.PCC_PASS }}
       run: |
-        ./twistcli app-embedded generate-fargate-task \
-          --address "https://${{ secrets.PCC_CONSOLE_URL }}" \
-          --console-host "${{ secrets.PCC_CONSOLE_ADDR }}" \
-          --user ${{ secrets.PCC_USER }} \
-          --password ${{ secrets.PCC_PASS }} \
-          --image-name "${{ steps.build-image.outputs.image }}" \
-          --output-file "protected_taskdef.json" \
-          --extract-entrypoint \
-          ${{ steps.task-def.outputs.task-definition }}
-
-    # 10. [안전장치] Defender 이미지 강제 교체 (Force Fix)
-    # 설명: twistcli가 실수로 사용자 이미지를 넣는 것을 방지하기 위해 Prisma 공식 이미지로 강제 변경
-    - name: Force Fix Defender Image
-      run: |
-        # 올바른 Defender 이미지 주소로 덮어쓰기
-        jq '(.containerDefinitions[] | select(.name=="TwistlockDefender") | .image) = "registry-auth.twistlock.com/tw_mm89dr5jry7odcm0fztpwxwjkqa0k0mw/twistlock/defender:defender_34_03_138"' protected_taskdef.json > fixed_taskdef.json && mv fixed_taskdef.json protected_taskdef.json
+        CLEAN_URL=$(echo "$PCC_CONSOLE_URL" | sed 's:/*$::')
+        ./twistcli app-embedded embed \
+          --address "$CLEAN_URL" \
+          --user "$PCC_USER" \
+          --password "$PCC_PASS" \
+          --app-id "${{ env.ECR_REPOSITORY }}" \
+          --data-folder "/tmp" \
+          Dockerfile
         
-        # [검증용] 변경된 이미지 주소 로그 출력 (배포 전 확인용)
-        echo "=== 최종 수정된 Defender 이미지 ==="
-        jq '.containerDefinitions[] | select(.name=="TwistlockDefender") | .image' protected_taskdef.json
+        ZIP_FILE=$(ls app_embedded_embed_*.zip)
+        unzip -o "$ZIP_FILE"
+        tar -xzvf twistlock_defender_app_embedded.tar.gz
+        chmod +x ./defender
 
-    # 11. 최종 배포
+    # 10. Dockerfile 수정 및 보안 이미지 빌드
+    - name: Build Protected Image
+      run: |
+        # 기존 주입 코드 제거 후 최상단에 재삽입
+        sed -i '/\/var\/lib\/twistlock\/fargate\/defender/d' Dockerfile
+        sed -i '/FROM/a COPY defender /var/lib/twistlock/fargate/defender' Dockerfile
+        sed -i '/COPY defender/a RUN chmod +x /var/lib/twistlock/fargate/defender' Dockerfile
+
+        # 보안 이미지 빌드 (로컬 태그: protected)
+        docker build -t ${{ env.ECR_REPOSITORY }}:protected .
+
+    # 11. [보안 이미지] ECR 푸시
+    - name: Tag and push protected image to ECR
+      env:
+        ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+      run: |
+        COMMIT_HASH=$(git rev-parse --short HEAD)
+        
+        # 보안 버전 태그 생성 및 푸시
+        docker tag ${{ env.ECR_REPOSITORY }}:protected $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:protected-$COMMIT_HASH
+        docker tag ${{ env.ECR_REPOSITORY }}:protected $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:latest-protected
+        
+        docker push $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:protected-$COMMIT_HASH
+        docker push $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:latest-protected
+
+    # 12. 최종 배포 (보안 이미지가 아닌, 원본 이미지 주소가 포함된 Task Def를 사용하거나 
+    # 필요에 따라 protected 이미지를 참조하도록 여기서 최종 결정)
     - name: Deploy Amazon ECS task definition
       uses: aws-actions/amazon-ecs-deploy-task-definition@v2
       with:
-        task-definition: protected_taskdef.json
+        task-definition: ${{ steps.task-def.outputs.task-definition }}
         service: ${{ env.ECS_SERVICE }}
         cluster: ${{ env.ECS_CLUSTER }}
         wait-for-service-stability: true
