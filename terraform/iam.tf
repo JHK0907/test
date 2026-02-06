@@ -1,21 +1,15 @@
 # terraform/iam.tf
-
-# 현재 AWS 계정 정보를 가져옵니다. (IAM Role ARN 생성에 필요)
 data "aws_caller_identity" "current" {}
 
-# GitHub Actions OIDC Provider 생성
-# 이 Provider는 GitHub가 AWS에 대한 인증을 요청할 때 AWS가 GitHub를 신뢰하도록 설정합니다.
-# AWS 계정당 한 번만 생성하면 됩니다.
-resource "aws_iam_openid_connect_provider" "github" {
+# 현재 AWS 계정 정보를 가져옵니다. (IAM Role ARN 생성에 필요)
+data "tls_certificate" "github" {
   url = "https://token.actions.githubusercontent.com"
-  client_id_list = ["sts.amazonaws.com"]
-  # GitHub Actions OIDC Provider의 현재 썸프린트입니다.
-  # AWS 공식 문서를 통해 최신 값을 확인하여 업데이트할 수 있습니다.
-  thumbprint_list = ["6938fd48ead637b5ddf9e0481287042340443974"] 
+}
 
-  tags = {
-    Name = "${var.name_prefix}-${var.project_name}-github-oidc-provider"
-  }
+resource "aws_iam_openid_connect_provider" "github" {
+  url             = "https://token.actions.githubusercontent.com"
+  client_id_list  = ["sts.amazonaws.com"]
+  thumbprint_list = [data.tls_certificate.github.certificates[0].sha1_fingerprint]
 }
 
 # GitHub Actions가 Assume Role할 IAM Role 생성
@@ -37,7 +31,7 @@ resource "aws_iam_role" "github_actions_deployer" {
             # !!!!!!!! 중요 !!!!!!!!
             # "YOUR_GITHUB_ORG/YOUR_REPO_NAME" 부분을 실제 GitHub 조직/계정 이름과 리포지토리 이름으로 변경해야 합니다.
             # 예: "my-github-org/tetris-on-fargate"
-            "token.actions.githubusercontent.com:sub": "repo:${var.github_repo_owner}/${var.github_repo_name}:ref:refs/heads/main"
+            "token.actions.githubusercontent.com:sub": "repo:${var.github_repo_owner}/${var.github_repo_name}:*"
           },
           StringEquals = {
             "token.actions.githubusercontent.com:aud": "sts.amazonaws.com"
