@@ -102,7 +102,7 @@ jobs:
         # 올바른 Defender 이미지 주소로 덮어쓰기
         jq '(.containerDefinitions[] | select(.name=="TwistlockDefender") | .image) = "registry-auth.twistlock.com/tw_mm89dr5jry7odcm0fztpwxwjkqa0k0mw/twistlock/defender:defender_34_03_138"' protected_taskdef.json > fixed_taskdef.json && mv fixed_taskdef.json protected_taskdef.json
         
-        # [검증] 변경된 이미지 주소 로그 출력 (배포 전 확인용)
+        # [검증용] 변경된 이미지 주소 로그 출력 (배포 전 확인용)
         echo "=== 최종 수정된 Defender 이미지 ==="
         jq '.containerDefinitions[] | select(.name=="TwistlockDefender") | .image' protected_taskdef.json
 
